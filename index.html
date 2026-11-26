@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ドロエチ服薬カレンダー</title>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+      background: #f6f7f9;
+      color: #222;
+      margin: 0;
+      padding: 16px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 14px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+    }
+    h1 { font-size: 18px; margin: 0 0 8px; }
+    .status-box { font-size: 14px; line-height: 1.6; }
+    .alert {
+      background: #fff3cd;
+      border-left: 4px solid #f0ad4e;
+      padding: 10px 12px;
+      border-radius: 6px;
+      margin-top: 8px;
+      font-weight: bold;
+      color: #856404;
+    }
+    .cal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .cal-header button {
+      background: #eee;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 4px;
+      text-align: center;
+    }
+    .dow { font-size: 12px; color: #666; padding: 4px 0; }
+    .day {
+      aspect-ratio: 1 / 1;
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      font-size: 13px;
+      background: #f0f2f5;
+      cursor: pointer;
+      user-select: none;
+    }
+    .day.empty { background: transparent; cursor: default; }
+    .day.today { outline: 2px solid #06c755; font-weight: bold; }
+    /* 1: 服用, 2: 服用+出血, 3: 休薬, 4: 出血のみ */
+    .st-1 { background: #d4edda; color: #155724; }
+    .st-2 { background: #f8d7da; color: #721c24; }
+    .st-3 { background: #e2e3e5; color: #383d41; }
+    .st-4 { background: #ffeeba; color: #856404; }
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      font-size: 12px;
+      margin-top: 10px;
+    }
+    .legend span {
+      padding: 3px 8px;
+      border-radius: 4px;
+    }
+    .modal-bg {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.45);
+      justify-content: center;
+      align-items: center;
+      z-index: 100;
+    }
+    .modal {
+      background: #fff;
+      padding: 20px;
+      border-radius: 12px;
+      width: 85%;
+      max-width: 340px;
+    }
+    .modal button {
+      display: block;
+      width: 100%;
+      margin: 8px 0;
+      padding: 12px;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    .loading { text-align: center; color: #666; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>ドロエチ服薬カレンダー</h1>
+    <div id="statusSummary" class="status-box">読み込み中...</div>
+  </div>
+
+  <div class="card">
+    <div class="cal-header">
+      <button onclick="changeMonth(-1)">◀ 前月</button>
+      <strong id="monthLabel"></strong>
+      <button onclick="changeMonth(1)">次月 ▶</button>
+    </div>
+    <div class="grid" id="calendarGrid"></div>
+    <div class="legend">
+      <span class="st-1">服用</span>
+      <span class="st-2">服用＋出血</span>
+      <span class="st-3">休薬</span>
+      <span class="st-4">出血のみ</span>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="modalBg" onclick="closeModal(event)">
+    <div class="modal" onclick="event.stopPropagation()">
+      <strong id="modalDateLabel"></strong>
+      <p style="font-size:13px;color:#555;">記録する状態を選んでください</p>
+      <button class="st-1" onclick="saveStatus(1)">服用した</button>
+      <button class="st-2" onclick="saveStatus(2)">服用した＋出血あり</button>
+      <button class="st-3" onclick="saveStatus(3)">休薬日</button>
+      <button class="st-4" onclick="saveStatus(4)">出血のみ（休薬中など）</button>
+      <button style="background:#eee;color:#333;" onclick="saveStatus(0)">記録を消す</button>
+    </div>
+  </div>
+
+  <script>
+    // ▼ ここをご自身の値に書き換えてください ▼
+    const LIFF_ID = '2012808447-NWIiE2xy';
+    const GAS_URL = 'https://script.google.com/macros/s/AKfycbzN2zIl4xcSsfM9E8GicNXuEVNDE9pdio3ZCgb_M5fCALLjUw8D2j4ToRfPz9GUffOZ/exec';
+    // ▲ ここまで ▲
+
+    let records = {}; // { "YYYY-MM-DD": status }
+    let currentYear = new Date().getFullYear();
+    let currentMonth = new Date().getMonth(); // 0-11
+    let selectedDate = '';
+
+    async function init() {
+      try {
+        await liff.init({ liffId: LIFF_ID });
+      } catch (e) {
+        console.warn('LIFF init skipped or failed:', e);
+      }
+      await fetchRecords();
+    }
+
+    async function fetchRecords() {
+      try {
+        const res = await fetch(GAS_URL);
+        const json = await res.json();
+        if (json.status === 'ok' && Array.isArray(json.data)) {
+          records = {};
+          json.data.forEach(row => {
+            if (row.date) records[row.date] = Number(row.status);
+          });
+        }
+      } catch (e) {
+        document.getElementById('statusSummary').textContent = 'データの取得に失敗しました。GASのURLを確認してください。';
+      }
+      renderAll();
+    }
+
+    async function saveStatus(status) {
+      if (!selectedDate) return;
+      document.getElementById('modalBg').style.display = 'none';
+      document.getElementById('statusSummary').textContent = '保存中...';
+      try {
+        const res = await fetch(GAS_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ action: 'upsert', date: selectedDate, status: status })
+        });
+        const json = await res.json();
+        if (json.status === 'ok' && Array.isArray(json.data)) {
+          records = {};
+          json.data.forEach(row => {
+            if (row.date) records[row.date] = Number(row.status);
+          });
+        }
+      } catch (e) {
+        alert('保存エラー: ' + e);
+      }
+      renderAll();
+    }
+
+    function renderAll() {
+      renderSummary();
+      renderCalendar();
+    }
+
+    function renderSummary() {
+      const dates = Object.keys(records).filter(d => records[d] > 0).sort();
+      let consecutiveTake = 0;
+      let consecutiveBleedAfter24 = 0;
+      let restDays = 0;
+
+      for (const d of dates) {
+        const st = records[d];
+        if (st === 1 || st === 2) {
+          consecutiveTake++;
+          restDays = 0;
+          if (consecutiveTake >= 25 && st === 2) {
+            consecutiveBleedAfter24++;
+          } else {
+            consecutiveBleedAfter24 = 0;
+          }
+        } else if (st === 3 || st === 4) {
+          restDays++;
+          if (restDays >= 4) {
+            consecutiveTake = 0;
+            consecutiveBleedAfter24 = 0;
+          }
+        }
+      }
+
+      let html = `現在の連続服用日数：<strong>${consecutiveTake}日目</strong>`;
+      if (restDays > 0 && restDays < 4) {
+        html += `<br>現在休薬中：<strong>${restDays}日目 / 4日間</strong>`;
+      }
+      if (consecutiveTake >= 120) {
+        html += `<div class="alert">120日連続服用に達しました。4日間の休薬に入ってください。</div>`;
+      } else if (consecutiveBleedAfter24 >= 3) {
+        html += `<div class="alert">25日目以降で3日連続の出血がありました。4日間の休薬に入ってください。</div>`;
+      } else if (consecutiveTake < 24) {
+        html += `<br><span style="font-size:12px;color:#666;">※24日目までは出血があっても休薬せず服用を続けます。</span>`;
+      }
+      document.getElementById('statusSummary').innerHTML = html;
+    }
+
+    function renderCalendar() {
+      document.getElementById('monthLabel').textContent = `${currentYear}年 ${currentMonth + 1}月`;
+      const grid = document.getElementById('calendarGrid');
+      grid.innerHTML = '';
+
+      ['日', '月', '火', '水', '木', '金', '土'].forEach(w => {
+        const el = document.createElement('div');
+        el.className = 'dow';
+        el.textContent = w;
+        grid.appendChild(el);
+      });
+
+      const firstDay = new Date(currentYear, currentMonth, 1).getDay();
+      const lastDate = new Date(currentYear, currentMonth + 1, 0).getDate();
+      const todayStr = formatDate(new Date());
+
+      for (let i = 0; i < firstDay; i++) {
+        const empty = document.createElement('div');
+        empty.className = 'day empty';
+        grid.appendChild(empty);
+      }
+
+      for (let d = 1; d <= lastDate; d++) {
+        const dateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        const st = records[dateStr] || 0;
+        const cell = document.createElement('div');
+        cell.className = 'day' + (st ? ` st-${st}` : '') + (dateStr === todayStr ? ' today' : '');
+        cell.textContent = d;
+        cell.onclick = () => openModal(dateStr);
+        grid.appendChild(cell);
+      }
+    }
+
+    function changeMonth(diff) {
+      currentMonth += diff;
+      if (currentMonth < 0) { currentMonth = 11; currentYear--; }
+      if (currentMonth > 11) { currentMonth = 0; currentYear++; }
+      renderCalendar();
+    }
+
+    function openModal(dateStr) {
+      selectedDate = dateStr;
+      document.getElementById('modalDateLabel').textContent = dateStr;
+      document.getElementById('modalBg').style.display = 'flex';
+    }
+
+    function closeModal() {
+      document.getElementById('modalBg').style.display = 'none';
+    }
+
+    function formatDate(dt) {
+      return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+    }
+
+    init();
+  </script>
+</body>
+</html>
